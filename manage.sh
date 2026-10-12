@@ -28,7 +28,17 @@ case "${1:-}" in
         until "${COMPOSE[@]}" exec -T gitea gitea admin user list >/dev/null 2>&1; do sleep 2; done
         "${COMPOSE[@]}" exec -T gitea gitea admin user create --username admin --email "${ADMIN_EMAIL:?set ADMIN_EMAIL in .env}" --admin --password "${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}" --must-change-password
         ;;
-      --restore) "$0" restore --latest ;;
+      --restore)
+        repo_check
+        restic snapshots --tag gitea-prod
+        read -r -p "Snapshot ID to restore (exact ID or short ID): " SNAP
+        [[ -n "$SNAP" ]] || { echo "No snapshot selected." >&2; exit 2; }
+        read -r -p "Type RESTORE to confirm restoring $SNAP into empty paths: " ANSWER
+        [[ "$ANSWER" == RESTORE ]] || { echo "Restore cancelled."; exit 1; }
+        flock -u 9
+        exec 9>&-
+        RESTORE_CONFIRM="gitea-prod:$SNAP" exec "$0" restore --snapshot "$SNAP"
+        ;;
       *) usage; exit 2 ;;
     esac ;;
   restore)
@@ -89,7 +99,6 @@ PY
         tar -cpf "$STAGING_DIR/payload/srv/gitea-prod/gitea-data.tar" -C "$DATA_DIR" .
         { printf 'service=gitea-prod\n'; printf 'gitea_version=%s\npostgres_version=%s\n' "$GITEA_VERSION" "$POSTGRES_VERSION"; printf 'created_utc=%s\n' "$(date -u +%FT%TZ)"; printf 'host=%s\n' "$(hostname)"; printf 'data_dir=%s\n' "$DATA_DIR"; } > "$STAGING_DIR/payload/srv/gitea-prod/manifest.txt"
         "${COMPOSE[@]}" start gitea >/dev/null
-        trap - EXIT INT TERM
         (cd "$STAGING_DIR" && restic backup payload --tag gitea-prod --tag "gitea-${GITEA_VERSION}" --host "$(hostname)")
         restic snapshots --latest 1 --tag gitea-prod
         ;;
