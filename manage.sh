@@ -115,7 +115,7 @@ PY
     trap rollback_restore EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    tar -xpf "$SRC/gitea-data.tar" -C "$DATA_DIR"
+    docker run --rm -v "$SRC:/in:ro" -v "$DATA_DIR:/out" alpine:3.22.2@sha256:4b7ce07002c69e8f3d704a9c5d6fd3053be500b7f1c69fc0d80990c2ad8dd412 tar -xpf /in/gitea-data.tar -C /out
     rm -f "$DATA_DIR/.deployment-ready"
     BOOTSTRAP_ALLOW_RESTORE=true "${COMPOSE[@]}" up -d db
     db_ready=false
@@ -143,7 +143,7 @@ PY
         trap 'exit 143' TERM
         if $was_running; then "${COMPOSE[@]}" stop -t 60 gitea; else echo "Gitea must be running for a complete backup; refusing partial backup." >&2; exit 1; fi
         "${COMPOSE[@]}" exec -T db pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc > "$STAGING_DIR/payload/srv/gitea-prod/database.dump"
-        tar -cpf "$STAGING_DIR/payload/srv/gitea-prod/gitea-data.tar" -C "$DATA_DIR" .
+        docker run --rm -v "$DATA_DIR:/data:ro" -v "$STAGING_DIR/payload/srv/gitea-prod:/out" alpine:3.22.2@sha256:4b7ce07002c69e8f3d704a9c5d6fd3053be500b7f1c69fc0d80990c2ad8dd412 tar -cpf /out/gitea-data.tar -C /data .
         { printf 'service=gitea-prod\n'; printf 'gitea_version=%s\npostgres_version=%s\n' "$GITEA_VERSION" "$POSTGRES_VERSION"; printf 'created_utc=%s\n' "$(date -u +%FT%TZ)"; printf 'host=%s\n' "$(hostname)"; printf 'data_dir=%s\n' "$DATA_DIR"; } > "$STAGING_DIR/payload/srv/gitea-prod/manifest.txt"
         "${COMPOSE[@]}" start gitea >/dev/null
         (cd "$STAGING_DIR" && restic backup payload --tag gitea-prod --tag "gitea-${GITEA_VERSION}" --host "$(hostname)")
