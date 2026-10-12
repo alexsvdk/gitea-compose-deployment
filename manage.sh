@@ -94,7 +94,9 @@ PY
         mkdir -p "$STAGING_DIR"; [[ ! -e "$STAGING_DIR/payload" ]] || { echo "Backup staging path already exists; inspect it, do not delete it implicitly." >&2; exit 1; }; mkdir -p "$STAGING_DIR/payload/srv/gitea-prod"
         was_running=false; "${COMPOSE[@]}" ps --status running --services | grep -qx gitea && was_running=true || true
         restore_service(){ if $was_running; then "${COMPOSE[@]}" start gitea >/dev/null || true; fi; rm -rf "$STAGING_DIR/payload"; }
-        trap restore_service EXIT INT TERM
+        trap restore_service EXIT
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
         if $was_running; then "${COMPOSE[@]}" stop -t 60 gitea; else echo "Gitea must be running for a complete backup; refusing partial backup." >&2; exit 1; fi
         "${COMPOSE[@]}" exec -T db pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc > "$STAGING_DIR/payload/srv/gitea-prod/database.dump"
         tar -cpf "$STAGING_DIR/payload/srv/gitea-prod/gitea-data.tar" -C "$DATA_DIR" .
