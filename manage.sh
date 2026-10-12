@@ -22,6 +22,7 @@ case "${1:-}" in
         mkdir -p "$DATA_DIR" "$PGDATA_DIR"
         empty_dir "$DATA_DIR" && empty_dir "$PGDATA_DIR" || { echo "Refusing fresh init: data paths are not empty." >&2; exit 1; }
         ((${#POSTGRES_PASSWORD} >= 24 && ${#GITEA_SECRET_KEY} >= 32 && ${#GITEA_INTERNAL_TOKEN} >= 32)) || { echo "Use long random DB and Gitea secrets before init." >&2; exit 2; }
+        repo_check
         "${COMPOSE[@]}" up -d db
         until "${COMPOSE[@]}" exec -T db pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; do sleep 2; done
         "${COMPOSE[@]}" up -d gitea
@@ -79,7 +80,7 @@ PY
     tar -tf "$SRC/gitea-data.tar" >/dev/null
     grep -Fx "gitea_version=$GITEA_VERSION" "$SRC/manifest.txt" >/dev/null || { echo "Snapshot Gitea version differs from configured image; use the matching release." >&2; exit 1; }
     grep -Fx "postgres_version=$POSTGRES_VERSION" "$SRC/manifest.txt" >/dev/null || { echo "Snapshot PostgreSQL version differs from configured image; use the matching release." >&2; exit 1; }
-    pg_restore --list "$SRC/database.dump" >/dev/null
+    docker run --rm -i "postgres:${POSTGRES_VERSION}@${POSTGRES_IMAGE_DIGEST}" pg_restore --list < "$SRC/database.dump" >/dev/null
     # Restores are only installed into verified-empty host paths.
     tar -xpf "$SRC/gitea-data.tar" -C "$DATA_DIR"
     "${COMPOSE[@]}" up -d db

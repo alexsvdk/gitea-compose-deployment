@@ -1,6 +1,6 @@
 # Operations
 
-See [Disaster recovery](DISASTER-RECOVERY.md) before storing production data. This project requires Docker Compose V2, `restic` (0.17+ recommended), `flock`, `tar`, and a Linux host. The repo is `gitea-prod` on every host; the machine name is snapshot metadata only.
+See [Disaster recovery](DISASTER-RECOVERY.md) before storing production data. This project requires Docker Compose V2, `restic` (0.17+ recommended), `flock`, `tar`, and a Linux host. Docker access to the configured image registries is needed for both image pulls and logical-dump validation. The repo is `gitea-prod` on every host; the machine name is snapshot metadata only.
 
 ## Configure and first boot
 
