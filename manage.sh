@@ -49,6 +49,8 @@ case "${1:-}" in
       *) usage; exit 2 ;;
     esac
     [[ -n "${3:-}" || "$SNAP" == latest ]] || { usage; exit 2; }
+    mkdir -p "$STAGING_DIR"
+    [[ ! -e "$STAGING_DIR/restore" ]] || { echo "Restore staging already exists; inspect/clear it explicitly before retry." >&2; exit 1; }
     mkdir -p "$DATA_DIR" "$PGDATA_DIR"
     if "${COMPOSE[@]}" ps --status running --services | grep -qx gitea; then echo "Stop Gitea before restore." >&2; exit 1; fi
     empty_dir "$DATA_DIR" && empty_dir "$PGDATA_DIR" || { echo "Restore only supports empty target directories; preserve existing data and use a clean host." >&2; exit 1; }
@@ -70,7 +72,6 @@ PY
     SELECTED="$(cat "$STAGING_DIR/selected-snapshot")"
     [[ -n "$SELECTED" ]] || { echo "Requested snapshot not found in gitea-prod snapshots." >&2; exit 1; }
     [[ "${RESTORE_CONFIRM:-}" == "gitea-prod:${SNAP}" ]] || { echo "Review listed snapshots; confirm with RESTORE_CONFIRM=gitea-prod:${SNAP} $0 restore ${2} ${3:-}" >&2; exit 2; }
-    [[ ! -e "$STAGING_DIR/restore" ]] || { echo "Restore staging already exists; inspect/clear it explicitly before retry." >&2; exit 1; }
     mkdir -p "$STAGING_DIR/restore"
     restic restore "$SELECTED" --target "$STAGING_DIR/restore"
     SRC="$STAGING_DIR/restore/payload/srv/gitea-prod"
@@ -83,7 +84,7 @@ PY
     tar -xpf "$SRC/gitea-data.tar" -C "$DATA_DIR"
     "${COMPOSE[@]}" up -d db
     until "${COMPOSE[@]}" exec -T db pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; do sleep 2; done
-    "${COMPOSE[@]}" exec -T db pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists < "$SRC/database.dump"
+    "${COMPOSE[@]}" exec -T db pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --no-owner --role "$POSTGRES_USER" --clean --if-exists < "$SRC/database.dump"
     "${COMPOSE[@]}" up -d gitea
     echo "Restore payload installed. Verify UI, users, issues, repositories, clone/fetch/push before serving traffic."
     ;;
