@@ -10,13 +10,15 @@ COMPOSE=(docker compose --env-file .env -f compose.yaml)
 LOCK="${STAGING_DIR}/.operation.lock"
 mkdir -p "$(dirname "$LOCK")"
 release_lock(){ rmdir "$LOCK.d" 2>/dev/null || true; }
-if command -v flock >/dev/null 2>&1; then
-  exec 9>"$LOCK"
-  if ! flock -n 9; then echo "Another backup/restore/init operation holds $LOCK" >&2; exit 1; fi
-  release_lock(){ flock -u 9; exec 9>&-; }
-else
-  mkdir "$LOCK.d" 2>/dev/null || { echo "Another operation holds $LOCK.d" >&2; exit 1; }
-  trap release_lock EXIT
+if [[ "${MANAGE_LOCK_INHERITED:-false}" != true ]]; then
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"$LOCK"
+    if ! flock -n 9; then echo "Another backup/restore/init operation holds $LOCK" >&2; exit 1; fi
+    release_lock(){ flock -u 9; exec 9>&-; }
+  else
+    mkdir "$LOCK.d" 2>/dev/null || { echo "Another operation holds $LOCK.d" >&2; exit 1; }
+    trap release_lock EXIT
+  fi
 fi
 usage(){ echo "Usage: $0 init --fresh | init --restore | restore --snapshot ID | restore --latest | backup now|list|verify|prune | status"; }
 empty_dir(){ [[ ! -d "$1" ]] || [[ -z "$(ls -A "$1")" ]]; }
@@ -59,8 +61,7 @@ case "${1:-}" in
         [[ -n "$SNAP" ]] || { echo "No snapshot selected." >&2; exit 2; }
         read -r -p "Type RESTORE to confirm restoring $SNAP into empty paths: " ANSWER
         [[ "$ANSWER" == RESTORE ]] || { echo "Restore cancelled."; exit 1; }
-        release_lock
-        RESTORE_CONFIRM="gitea-prod:$SNAP" exec "$0" restore --snapshot "$SNAP"
+        MANAGE_LOCK_INHERITED=true RESTORE_CONFIRM="gitea-prod:$SNAP" exec "$0" restore --snapshot "$SNAP"
         ;;
       *) usage; exit 2 ;;
     esac ;;
@@ -111,6 +112,7 @@ PY
     rollback_restore(){
       "${COMPOSE[@]}" stop gitea db >/dev/null 2>&1 || true
       rm -rf "$DATA_DIR" "$PGDATA_DIR" "$STAGING_DIR/restore"
+      release_lock
     }
     trap rollback_restore EXIT
     trap 'exit 130' INT
@@ -129,6 +131,7 @@ PY
     "${COMPOSE[@]}" up -d --force-recreate bootstrap gitea
     rm -rf "$STAGING_DIR/restore"
     trap - EXIT INT TERM
+    release_lock
     echo "Restore payload installed. Verify UI, users, issues, repositories, clone/fetch/push before serving traffic."
     ;;
   backup)
@@ -153,7 +156,14 @@ PY
       verify) repo_check; restic check --read-data-subset=5%; restic snapshots --tag gitea-prod --latest 1 ;;
       prune)
         repo_check
-        restic forget --tag gitea-prod --keep-daily "${KEEP_DAILY:?}" --keep-weekly "${KEEP_WEEKLY:?}" --keep-monthly "${KEEP_MONTHLY:?}" --prune
+        restic forget --tag gitea-prod --group-by '' --keep-daily "${KEEP_DAILY:?}" --keep-weekly "${KEEP_WEEKLY:?}" --keep-monthly "${KEEP_MONTHLY:?}" --dry-run
+        if [[ "${3:-}" == --confirm ]]; then
+          :
+        else
+          read -r -p "Type PRUNE to apply this gitea-prod retention plan: " ANSWER
+          [[ "$ANSWER" == PRUNE ]] || { echo "Prune cancelled."; exit 1; }
+        fi
+        restic forget --tag gitea-prod --group-by '' --keep-daily "$KEEP_DAILY" --keep-weekly "$KEEP_WEEKLY" --keep-monthly "$KEEP_MONTHLY" --prune
         ;;
       *) usage; exit 2 ;;
     esac ;;

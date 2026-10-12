@@ -5,4 +5,4 @@ After=docker.service
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/gitea-compose-deployment
-ExecStart=/opt/gitea-compose-deployment/manage.sh backup prune
+ExecStart=/opt/gitea-compose-deployment/manage.sh backup prune --confirm
