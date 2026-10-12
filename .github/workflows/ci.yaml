@@ -10,5 +10,12 @@ jobs:
       - name: Validate compose structure
         run: |
           cp .env.example .env
-          sed -i 's#s3:https://s3.REGION.backblazeb2.com/BUCKET/services/gitea-prod/restic#local:/tmp/restic#g' .env
+          sed -i -e 's#s3:https://s3.REGION.backblazeb2.com/BUCKET/services/gitea-prod/restic#local:/tmp/restic#g' \
+            -e 's/^POSTGRES_PASSWORD=$/POSTGRES_PASSWORD=ci-placeholder/' \
+            -e 's/^ADMIN_PASSWORD=$/ADMIN_PASSWORD=ci-placeholder/' \
+            -e 's/^GITEA_SECRET_KEY=$/GITEA_SECRET_KEY=ci-placeholder/' \
+            -e 's/^GITEA_INTERNAL_TOKEN=$/GITEA_INTERNAL_TOKEN=ci-placeholder/' \
+            -e 's/^RESTIC_PASSWORD=$/RESTIC_PASSWORD=ci-placeholder/' \
+            -e 's/^AWS_ACCESS_KEY_ID=$/AWS_ACCESS_KEY_ID=ci-placeholder/' \
+            -e 's/^AWS_SECRET_ACCESS_KEY=$/AWS_SECRET_ACCESS_KEY=ci-placeholder/' .env
           docker compose --env-file .env -f compose.yaml config --quiet
