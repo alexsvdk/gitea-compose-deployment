@@ -1,0 +1,5 @@
+# Add this site block to the existing Caddy server configuration.
+git.svdk.dev {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:3000
+}

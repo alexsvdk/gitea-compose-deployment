@@ -1,0 +1,14 @@
+name: deployment checks
+on: [push, pull_request]
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell syntax
+        run: bash -n manage.sh
+      - name: Validate compose structure
+        run: |
+          cp .env.example .env
+          sed -i 's#s3:https://s3.REGION.backblazeb2.com/BUCKET/services/gitea-prod/restic#local:/tmp/restic#g' .env
+          docker compose --env-file .env -f compose.yaml config --quiet

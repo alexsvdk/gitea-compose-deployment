@@ -1,0 +1,9 @@
+[Unit]
+Description=Consistent Gitea backup to restic
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/gitea-compose-deployment
+ExecStart=/opt/gitea-compose-deployment/manage.sh backup now

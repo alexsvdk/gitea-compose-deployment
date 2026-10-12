@@ -1,0 +1,69 @@
+name: gitea-prod
+services:
+  db:
+    image: postgres:${POSTGRES_VERSION:?set POSTGRES_VERSION}@${POSTGRES_IMAGE_DIGEST:?set POSTGRES_IMAGE_DIGEST}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - ${PGDATA_DIR:?set PGDATA_DIR}:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+  gitea:
+    image: docker.gitea.com/gitea:${GITEA_VERSION:?set GITEA_VERSION}@${GITEA_IMAGE_DIGEST:?set GITEA_IMAGE_DIGEST}
+    restart: unless-stopped
+    stop_grace_period: 2m
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      USER_UID: "1000"
+      USER_GID: "1000"
+      GITEA__database__DB_TYPE: postgres
+      GITEA__database__HOST: db:5432
+      GITEA__database__NAME: ${POSTGRES_DB:?set POSTGRES_DB}
+      GITEA__database__USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      GITEA__database__PASSWD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      GITEA__server__DOMAIN: ${GITEA_DOMAIN:?set GITEA_DOMAIN}
+      GITEA__server__ROOT_URL: https://${GITEA_DOMAIN:?set GITEA_DOMAIN}/
+      GITEA__server__PROTOCOL: http
+      GITEA__server__HTTP_PORT: "3000"
+      GITEA__server__SSH_DOMAIN: ${GITEA_DOMAIN:?set GITEA_DOMAIN}
+      GITEA__server__SSH_PORT: "2222"
+      GITEA__server__LFS_START_SERVER: "true"
+      GITEA__service__DISABLE_REGISTRATION: "true"
+      GITEA__service__REQUIRE_SIGNIN_VIEW: "true"
+      GITEA__service__ENABLE_USER_HEATMAP: "false"
+      GITEA__service__ENABLE_TIMETRACKING: "false"
+      GITEA__service__ENABLE_NOTIFY_MAIL: "false"
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__security__SECRET_KEY: ${GITEA_SECRET_KEY:?set GITEA_SECRET_KEY}
+      GITEA__security__INTERNAL_TOKEN: ${GITEA_INTERNAL_TOKEN:?set GITEA_INTERNAL_TOKEN}
+      GITEA__server__LANDING_PAGE: login
+      GITEA__server__DISABLE_SSH: "false"
+      GITEA__server__OFFLINE_MODE: "false"
+      GITEA__security__REVERSE_PROXY_LIMIT: "1"
+      GITEA__security__REVERSE_PROXY_TRUSTED_PROXIES: "172.16.0.0/12,192.168.0.0/16,10.0.0.0/8"
+      GITEA__packages__ENABLED: "false"
+      GITEA__actions__ENABLED: "true"
+      GITEA__actions__ARTIFACT_RETENTION_DAYS: "30"
+      GITEA__repository__DEFAULT_PRIVATE: "true"
+      GITEA__repository__DEFAULT_BRANCH: main
+      GITEA__openid__ENABLE_OPENID_SIGNIN: "false"
+      GITEA__openid__ENABLE_OPENID_SIGNUP: "false"
+    volumes:
+      - ${DATA_DIR:?set DATA_DIR}:/data
+    ports:
+      - 127.0.0.1:3000:3000
+      - 0.0.0.0:2222:22
+    networks: [backend]
+networks:
+  backend:
+    driver: bridge
