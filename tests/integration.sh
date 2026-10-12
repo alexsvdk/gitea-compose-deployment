@@ -7,6 +7,7 @@ NET="${PROJECT}-proxy"
 cleanup(){
   docker compose --project-name "$PROJECT" --env-file "$TMP/.env" -f "$ROOT/compose.yaml" down -v --remove-orphans >/dev/null 2>&1 || true
   docker network rm "$NET" >/dev/null 2>&1 || true
+  docker run --rm -v "$TMP:/test" alpine:3.22.2@sha256:4b7ce07002c69e8f3d704a9c5d6fd3053be500b7f1c69fc0d80990c2ad8dd412 rm -rf /test >/dev/null 2>&1 || true
   rm -rf "$TMP"
 }
 trap cleanup EXIT
