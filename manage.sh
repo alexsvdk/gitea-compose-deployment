@@ -66,6 +66,9 @@ PY
     SRC="$STAGING_DIR/restore/payload/srv/gitea-prod"
     [[ -s "$SRC/gitea-data.tar" && -s "$SRC/database.dump" && -s "$SRC/manifest.txt" ]] || { echo "Snapshot lacks required payload; refusing restore." >&2; exit 1; }
     tar -tf "$SRC/gitea-data.tar" >/dev/null
+    grep -Fx "gitea_version=$GITEA_VERSION" "$SRC/manifest.txt" >/dev/null || { echo "Snapshot Gitea version differs from configured image; use the matching release." >&2; exit 1; }
+    grep -Fx "postgres_version=$POSTGRES_VERSION" "$SRC/manifest.txt" >/dev/null || { echo "Snapshot PostgreSQL version differs from configured image; use the matching release." >&2; exit 1; }
+    pg_restore --list "$SRC/database.dump" >/dev/null
     # Restores are only installed into verified-empty host paths.
     tar -xpf "$SRC/gitea-data.tar" -C "$DATA_DIR"
     "${COMPOSE[@]}" up -d db
