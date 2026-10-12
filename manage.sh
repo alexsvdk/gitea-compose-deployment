@@ -81,11 +81,11 @@ PY
         was_running=false; "${COMPOSE[@]}" ps --status running --services | grep -qx gitea && was_running=true || true
         restore_service(){ if $was_running; then "${COMPOSE[@]}" start gitea >/dev/null || true; fi; rm -rf "$STAGING_DIR/payload"; }
         trap restore_service EXIT INT TERM
-        $was_running && "${COMPOSE[@]}" stop -t 60 gitea
+        if $was_running; then "${COMPOSE[@]}" stop -t 60 gitea; else echo "Gitea must be running for a complete backup; refusing partial backup." >&2; exit 1; fi
         "${COMPOSE[@]}" exec -T db pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc > "$STAGING_DIR/payload/srv/gitea-prod/database.dump"
         tar -cpf "$STAGING_DIR/payload/srv/gitea-prod/gitea-data.tar" -C "$DATA_DIR" .
         { printf 'service=gitea-prod\n'; printf 'gitea_version=%s\npostgres_version=%s\n' "$GITEA_VERSION" "$POSTGRES_VERSION"; printf 'created_utc=%s\n' "$(date -u +%FT%TZ)"; printf 'host=%s\n' "$(hostname)"; printf 'data_dir=%s\n' "$DATA_DIR"; } > "$STAGING_DIR/payload/srv/gitea-prod/manifest.txt"
-        $was_running && "${COMPOSE[@]}" start gitea >/dev/null
+        "${COMPOSE[@]}" start gitea >/dev/null
         trap - EXIT INT TERM
         (cd "$STAGING_DIR" && restic backup payload --tag gitea-prod --tag "gitea-${GITEA_VERSION}" --host "$(hostname)")
         restic snapshots --latest 1 --tag gitea-prod
