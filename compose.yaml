@@ -1,7 +1,7 @@
-name: gitea-prod
+name: ${COMPOSE_PROJECT_NAME:-gitea-prod}
 services:
   db:
-    image: postgres:${POSTGRES_VERSION:?set POSTGRES_VERSION}@${POSTGRES_IMAGE_DIGEST:?set POSTGRES_IMAGE_DIGEST}
+    image: ${POSTGRES_IMAGE:-postgres}:${POSTGRES_VERSION:?set POSTGRES_VERSION}@${POSTGRES_IMAGE_DIGEST:?set POSTGRES_IMAGE_DIGEST}
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
@@ -10,19 +10,36 @@ services:
     volumes:
       - ${PGDATA_DIR:?set PGDATA_DIR}:/var/lib/postgresql/data
     networks: [backend]
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 20s
+  bootstrap:
+    image: alpine:3.22.2@sha256:4b7ce07002c69e8f3d704a9c5d6fd3053be500b7f1c69fc0d80990c2ad8dd412
+    restart: "no"
+    environment:
+      ALLOW_FRESH: ${BOOTSTRAP_ALLOW_FRESH:-false}
+      ALLOW_RESTORE: ${BOOTSTRAP_ALLOW_RESTORE:-false}
+    volumes:
+      - ${DATA_DIR:?set DATA_DIR}:/data:ro
+      - ${PGDATA_DIR:?set PGDATA_DIR}:/pgdata:ro
+      - ./scripts/bootstrap-gate.sh:/usr/local/bin/bootstrap-gate:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/bootstrap-gate"]
+    networks: [backend]
   gitea:
-    image: docker.gitea.com/gitea:${GITEA_VERSION:?set GITEA_VERSION}@${GITEA_IMAGE_DIGEST:?set GITEA_IMAGE_DIGEST}
+    image: ${GITEA_IMAGE:-docker.gitea.com/gitea}:${GITEA_VERSION:?set GITEA_VERSION}@${GITEA_IMAGE_DIGEST:?set GITEA_IMAGE_DIGEST}
     restart: unless-stopped
     stop_grace_period: 2m
     depends_on:
       db:
         condition: service_healthy
+      bootstrap:
+        condition: service_completed_successfully
     environment:
       USER_UID: "1000"
       USER_GID: "1000"
@@ -61,9 +78,12 @@ services:
     volumes:
       - ${DATA_DIR:?set DATA_DIR}:/data
     ports:
-      - 127.0.0.1:3000:3000
-      - 0.0.0.0:2222:22
-    networks: [backend]
+      - ${HTTP_HOST_BIND:-127.0.0.1}:${HTTP_HOST_PORT:-3000}:3000
+      - ${SSH_HOST_PORT:-2222}:22
+    networks: [backend, proxy]
 networks:
   backend:
     driver: bridge
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK:?set the existing Caddy Docker network}

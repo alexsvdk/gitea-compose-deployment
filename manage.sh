@@ -3,15 +3,22 @@ set -Eeuo pipefail
 cd "$(dirname "$0")"
 [[ -f .env ]] || { echo "Missing .env; copy .env.example and configure secrets." >&2; exit 2; }
 chmod 600 .env
-set -a; source .env; set +a
+while IFS= read -r -d '' entry; do export "$entry"; done < <(python3 scripts/load-env.py .env)
 : "${DATA_DIR:?}" "${PGDATA_DIR:?}" "${STAGING_DIR:?}" "${RESTIC_REPOSITORY:?}" "${RESTIC_PASSWORD:?}"
 export RESTIC_REPOSITORY RESTIC_PASSWORD AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 COMPOSE=(docker compose --env-file .env -f compose.yaml)
-LOCK=".operation.lock"
-command -v flock >/dev/null || { echo "flock is required (install util-linux)." >&2; exit 2; }
-exec 9>"$LOCK"
-flock -n 9 || { echo "Another backup/restore/init operation holds $LOCK" >&2; exit 1; }
-usage(){ echo "Usage: $0 init --fresh | init --restore | restore --snapshot ID | restore --latest | backup now|list|verify | status"; }
+LOCK="${STAGING_DIR}/.operation.lock"
+mkdir -p "$(dirname "$LOCK")"
+release_lock(){ rmdir "$LOCK.d" 2>/dev/null || true; }
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$LOCK"
+  if ! flock -n 9; then echo "Another backup/restore/init operation holds $LOCK" >&2; exit 1; fi
+  release_lock(){ flock -u 9; exec 9>&-; }
+else
+  mkdir "$LOCK.d" 2>/dev/null || { echo "Another operation holds $LOCK.d" >&2; exit 1; }
+  trap release_lock EXIT
+fi
+usage(){ echo "Usage: $0 init --fresh | init --restore | restore --snapshot ID | restore --latest | backup now|list|verify|prune | status"; }
 empty_dir(){ [[ ! -d "$1" ]] || [[ -z "$(ls -A "$1")" ]]; }
 repo_check(){ restic snapshots >/dev/null; }
 case "${1:-}" in
@@ -23,11 +30,27 @@ case "${1:-}" in
         empty_dir "$DATA_DIR" && empty_dir "$PGDATA_DIR" || { echo "Refusing fresh init: data paths are not empty." >&2; exit 1; }
         ((${#POSTGRES_PASSWORD} >= 24 && ${#GITEA_SECRET_KEY} >= 32 && ${#GITEA_INTERNAL_TOKEN} >= 32)) || { echo "Use long random DB and Gitea secrets before init." >&2; exit 2; }
         repo_check
-        "${COMPOSE[@]}" up -d db
-        until "${COMPOSE[@]}" exec -T db pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; do sleep 2; done
-        "${COMPOSE[@]}" up -d gitea
-        until "${COMPOSE[@]}" exec -T gitea gitea admin user list >/dev/null 2>&1; do sleep 2; done
-        "${COMPOSE[@]}" exec -T gitea gitea admin user create --username admin --email "${ADMIN_EMAIL:?set ADMIN_EMAIL in .env}" --admin --password "${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}" --must-change-password
+        EXISTING="$(restic snapshots --json | python3 -c 'import json,sys; print(sum("gitea-prod" in (s.get("tags") or []) for s in json.load(sys.stdin)))')"
+        [[ "$EXISTING" == 0 ]] || { echo "Refusing fresh init: gitea-prod snapshots already exist; choose restore." >&2; exit 1; }
+        BOOTSTRAP_ALLOW_FRESH=true "${COMPOSE[@]}" up -d db
+        db_ready=false
+        for _ in {1..60}; do
+          if "${COMPOSE[@]}" exec -T db pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then db_ready=true; break; fi
+          sleep 2
+        done
+        $db_ready || { echo "PostgreSQL did not become ready within 120 seconds." >&2; exit 1; }
+        BOOTSTRAP_ALLOW_FRESH=true "${COMPOSE[@]}" up -d --force-recreate bootstrap gitea
+        ready=false
+        for _ in {1..60}; do
+          if "${COMPOSE[@]}" exec -T -u git gitea gitea admin user list >/dev/null 2>&1; then ready=true; break; fi
+          if [[ "$(docker inspect -f '{{.State.Running}}' "$("${COMPOSE[@]}" ps -q gitea)")" != true ]]; then
+            echo "Gitea container exited before becoming ready." >&2; exit 1
+          fi
+          sleep 2
+        done
+        $ready || { echo "Gitea did not become ready within 120 seconds." >&2; exit 1; }
+        "${COMPOSE[@]}" exec -T -u git gitea gitea admin user create --username admin --email "${ADMIN_EMAIL:?set ADMIN_EMAIL in .env}" --admin --password "${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}" --must-change-password=false
+        touch "$DATA_DIR/.deployment-ready"
         ;;
       --restore)
         repo_check
@@ -36,8 +59,7 @@ case "${1:-}" in
         [[ -n "$SNAP" ]] || { echo "No snapshot selected." >&2; exit 2; }
         read -r -p "Type RESTORE to confirm restoring $SNAP into empty paths: " ANSWER
         [[ "$ANSWER" == RESTORE ]] || { echo "Restore cancelled."; exit 1; }
-        flock -u 9
-        exec 9>&-
+        release_lock
         RESTORE_CONFIRM="gitea-prod:$SNAP" exec "$0" restore --snapshot "$SNAP"
         ;;
       *) usage; exit 2 ;;
@@ -74,6 +96,10 @@ PY
     [[ -n "$SELECTED" ]] || { echo "Requested snapshot not found in gitea-prod snapshots." >&2; exit 1; }
     [[ "${RESTORE_CONFIRM:-}" == "gitea-prod:${SNAP}" ]] || { echo "Review listed snapshots; confirm with RESTORE_CONFIRM=gitea-prod:${SNAP} $0 restore ${2} ${3:-}" >&2; exit 2; }
     mkdir -p "$STAGING_DIR/restore"
+    cleanup_restore_stage(){ rm -rf "$STAGING_DIR/restore"; }
+    trap cleanup_restore_stage EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     restic restore "$SELECTED" --target "$STAGING_DIR/restore"
     SRC="$STAGING_DIR/restore/payload/srv/gitea-prod"
     [[ -s "$SRC/gitea-data.tar" && -s "$SRC/database.dump" && -s "$SRC/manifest.txt" ]] || { echo "Snapshot lacks required payload; refusing restore." >&2; exit 1; }
@@ -81,20 +107,37 @@ PY
     grep -Fx "gitea_version=$GITEA_VERSION" "$SRC/manifest.txt" >/dev/null || { echo "Snapshot Gitea version differs from configured image; use the matching release." >&2; exit 1; }
     grep -Fx "postgres_version=$POSTGRES_VERSION" "$SRC/manifest.txt" >/dev/null || { echo "Snapshot PostgreSQL version differs from configured image; use the matching release." >&2; exit 1; }
     docker run --rm -i "postgres:${POSTGRES_VERSION}@${POSTGRES_IMAGE_DIGEST}" pg_restore --list < "$SRC/database.dump" >/dev/null
-    # Restores are only installed into verified-empty host paths.
+    # Targets are verified empty above; a failed import rolls back only these new paths.
+    rollback_restore(){
+      "${COMPOSE[@]}" stop gitea db >/dev/null 2>&1 || true
+      rm -rf "$DATA_DIR" "$PGDATA_DIR" "$STAGING_DIR/restore"
+    }
+    trap rollback_restore EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     tar -xpf "$SRC/gitea-data.tar" -C "$DATA_DIR"
-    "${COMPOSE[@]}" up -d db
-    until "${COMPOSE[@]}" exec -T db pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; do sleep 2; done
+    rm -f "$DATA_DIR/.deployment-ready"
+    BOOTSTRAP_ALLOW_RESTORE=true "${COMPOSE[@]}" up -d db
+    db_ready=false
+        for _ in {1..60}; do
+          if "${COMPOSE[@]}" exec -T db pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then db_ready=true; break; fi
+          sleep 2
+        done
+        $db_ready || { echo "PostgreSQL did not become ready within 120 seconds." >&2; exit 1; }
     "${COMPOSE[@]}" exec -T db pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --no-owner --role "$POSTGRES_USER" --clean --if-exists < "$SRC/database.dump"
-    "${COMPOSE[@]}" up -d gitea
+    touch "$DATA_DIR/.deployment-ready"
+    "${COMPOSE[@]}" up -d --force-recreate bootstrap gitea
+    rm -rf "$STAGING_DIR/restore"
+    trap - EXIT INT TERM
     echo "Restore payload installed. Verify UI, users, issues, repositories, clone/fetch/push before serving traffic."
     ;;
   backup)
     case "${2:-}" in
+      init) restic init ;;
       now)
         mkdir -p "$STAGING_DIR"; [[ ! -e "$STAGING_DIR/payload" ]] || { echo "Backup staging path already exists; inspect it, do not delete it implicitly." >&2; exit 1; }; mkdir -p "$STAGING_DIR/payload/srv/gitea-prod"
         was_running=false; "${COMPOSE[@]}" ps --status running --services | grep -qx gitea && was_running=true || true
-        restore_service(){ if $was_running; then "${COMPOSE[@]}" start gitea >/dev/null || true; fi; rm -rf "$STAGING_DIR/payload"; }
+        restore_service(){ if $was_running; then "${COMPOSE[@]}" start gitea >/dev/null || true; fi; rm -rf "$STAGING_DIR/payload"; release_lock; }
         trap restore_service EXIT
         trap 'exit 130' INT
         trap 'exit 143' TERM
@@ -108,6 +151,10 @@ PY
         ;;
       list) repo_check; restic snapshots --tag gitea-prod ;;
       verify) repo_check; restic check --read-data-subset=5%; restic snapshots --tag gitea-prod --latest 1 ;;
+      prune)
+        repo_check
+        restic forget --tag gitea-prod --keep-daily "${KEEP_DAILY:?}" --keep-weekly "${KEEP_WEEKLY:?}" --keep-monthly "${KEEP_MONTHLY:?}" --prune
+        ;;
       *) usage; exit 2 ;;
     esac ;;
   status)

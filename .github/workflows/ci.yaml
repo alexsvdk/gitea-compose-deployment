@@ -6,7 +6,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Shell syntax
-        run: bash -n manage.sh
+        run: bash -n manage.sh tests/integration.sh
+      - name: Install restic
+        run: sudo apt-get update && sudo apt-get install -y restic
+      - name: Full backup and restore smoke test
+        run: tests/integration.sh
       - name: Validate compose structure
         run: |
           cp .env.example .env

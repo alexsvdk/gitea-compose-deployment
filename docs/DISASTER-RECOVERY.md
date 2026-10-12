@@ -10,7 +10,7 @@ No backup can restore credentials that were never saved outside the lost host.
 
 ## Restore on a clean Linux host
 
-1. Install Docker/Compose, restic, and `flock`; clone this repo. Configure `.env` with the same secrets and repository, and set DATA_DIR/PGDATA_DIR/STAGING_DIR to new empty paths. Do not use `init --fresh`.
+1. Install Docker/Compose, restic, and Python 3; clone this repo. Create the configured shared Caddy Docker network or temporarily provide a disposable proxy network. Configure `.env` with the same secrets and repository, and set DATA_DIR/PGDATA_DIR/STAGING_DIR to new empty paths. Do not use `init --fresh`.
 2. Test access with `restic snapshots --tag gitea-prod`. Wrong credentials, unreachable B2, or no snapshots are errors; do not initialize a new production instance.
 3. Review available snapshot IDs, timestamps, tags and host origin using `./manage.sh backup list`. Select the exact snapshot, not an implicit latest, when recovery point matters.
 4. Use the exact image versions recorded in the snapshot manifest (default `.env.example` values only match snapshots created with these pinned images). Restore requires empty data and database directories and an explicit confirmation. Example: `RESTORE_CONFIRM=gitea-prod:SNAPSHOT_ID ./manage.sh restore --snapshot SNAPSHOT_ID`. For explicitly latest: `RESTORE_CONFIRM=gitea-prod:latest ./manage.sh restore --latest`. Interactive selection is available with `./manage.sh init --restore`.

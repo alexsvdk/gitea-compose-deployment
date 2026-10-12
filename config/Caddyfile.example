@@ -1,5 +1,6 @@
 # Add this site block to the existing Caddy server configuration.
+# Caddy and this Compose project must join the same external Docker network.
 git.svdk.dev {
     encode zstd gzip
-    reverse_proxy 127.0.0.1:3000
+    reverse_proxy gitea:3000
 }
